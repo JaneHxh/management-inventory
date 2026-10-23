@@ -1,5 +1,5 @@
 import {build} from 'esbuild';
-import {mkdir,copyFile,rm,readFile,writeFile} from 'node:fs/promises';
+import {mkdir,copyFile,rm,readFile,writeFile,cp} from 'node:fs/promises';
 await rm('dist',{recursive:true,force:true});
 await mkdir('dist/src',{recursive:true});
 await build({entryPoints:['src/app.js'],outfile:'dist/src/app.js',bundle:true,minify:true,format:'esm',platform:'browser',target:['es2022'],legalComments:'eof'});
@@ -7,4 +7,5 @@ await copyFile('index.html','dist/index.html');
 await copyFile('src/style.css','dist/src/style.css');
 const notices = await Promise.all(['read-excel-file','fflate','saxen','unzipper-esm','graceful-fs','node-int64'].map(async name => name + '\n' + await readFile('node_modules/' + name + '/LICENSE','utf8')));
 await writeFile('dist/THIRD_PARTY_NOTICES.txt',notices.join('\n\n--------------------\n\n'));
+await cp('templates','dist/templates',{recursive:true});
 console.log('Built static website in dist/');
