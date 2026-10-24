@@ -4,8 +4,8 @@ import {emptyState,addProduct,addOrder,receiveOrder,addShipment,ship,cancelShipm
 import {schemas,templateCSV,parseCSV,prepareImport,suggestMapping} from '../src/importer.js';
 const load=(s,csv)=>{const t=parseCSV(csv);return prepareImport(s,t,'products',suggestMapping(t.headers,'products'));};
 const sample=()=>load(emptyState(),templateCSV('products')).next;
-test('国内库存模板九列按用户顺序，批量导入现货订单及真实在做订单',()=>{
- assert.equal(schemas.products.label,'国内库存');assert.deepEqual(schemas.products.fields.map(f=>f[1]),['产品名称','货号','MSKU','FNSKU','现货数量','在做订单数量','现货订单号+数量','在做订单号+数量','在做订单号+货好日期']);
+test('国内库存模板十列按用户顺序，批量导入现货订单及真实在做订单',()=>{
+ assert.equal(schemas.products.label,'国内库存');assert.deepEqual(schemas.products.fields.map(f=>f[1]),['产品名称','货号','MSKU','FNSKU','现货数量','在做订单数量','现货订单号+数量','在做订单号+数量','在做订单号+货好日期','国家']);
  const s=sample(),p=s.products[0];assert.equal(p.stock,100);assert.deepEqual(p.stockLots,[{ref:'PO-STOCK-001',qty:60},{ref:'PO-STOCK-002',qty:40}]);assert.equal(producing(s,p.id),200);assert.equal(s.orders.length,1);assert.equal(p.fba,0);validateState(s);
  receiveOrder(s,s.orders[0].id);assert.equal(p.stock,300);assert.equal(producing(s,p.id),0);assert.equal(p.stockLots.find(l=>l.ref==='PO-DOM-001').qty,200);validateState(s);
 });

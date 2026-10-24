@@ -16,7 +16,7 @@ export function forecast(state,p,base=today()){
  const allProduction=state.orders.filter(o=>o.productId===p.id&&o.status==='producing');
  const production=allProduction.filter(o=>o.due>=base),unconfirmedProduction=allProduction.filter(o=>o.due<base).reduce((n,o)=>n+o.qty,0);
  const shipments=state.shipments.filter(s=>s.productId===p.id&&s.status==='shipped');
- const timedTransit=shipments.filter(s=>s.eta&&s.eta>=base),known=timedTransit.reduce((n,s)=>n+s.qty,0);
+ const timedTransit=[...shipments.filter(s=>s.eta&&s.eta>=base),...(p.fbaTransitLots||[]).filter(l=>l.eta>=base)],known=timedTransit.reduce((n,s)=>n+s.qty,0);
  const uncertain=Math.max(0,p.transit-known);
  const planned=state.shipments.filter(s=>s.productId===p.id&&s.status==='planned'),reservedQty=planned.reduce((n,s)=>n+s.qty,0);
  const events=[{day:transport,qty:p.stock-reservedQty}];

@@ -1,3 +1,4 @@
+import {addLogistics,normalizeLogistics} from './logistics.js';
 import {ensureStockLots,validateStockLots,addStockLot,planStockLots,takeLots,deductStockLots,parseOrderPairs} from './domestic-stock.js';
 import {europeQuote} from './europe-freight.js';
 import {defaultPlanning} from './planning.js';
@@ -5,7 +6,7 @@ import {decimal,integer,validDate,addSales,addCostBaseline,addActualBill,jpDefau
 export const today = () => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit'}).format(new Date());
 export const id = () => crypto.randomUUID();
 export function daysUntil(date, base = today()) { return Math.round((Date.parse(date + 'T00:00:00Z') - Date.parse(base + 'T00:00:00Z')) / 86400000); }
-export const emptyState = () => ({version:2, demo:false, reminderDays:7, products:[], orders:[], shipments:[], ledger:[], sales:[], costBases:[], costBills:[], estimates:[], europeEstimates:[], jpSettings:jpDefaults(), planning:defaultPlanning()});
+export const emptyState = () => ({version:2, demo:false, reminderDays:7, products:[], orders:[], shipments:[], ledger:[], sales:[], costBases:[], costBills:[], estimates:[], europeEstimates:[], shipmentDrafts:[], freightRecords:[], jpSettings:jpDefaults(), planning:defaultPlanning()});
 export const reserved = (state, productId) => state.shipments.filter(s => s.productId === productId && s.status === 'planned').reduce((n,s) => n+s.qty,0);
 export const available = (state, p) => p.stock - reserved(state,p.id);
 export const producing = (state, productId) => state.orders.filter(o=>o.productId===productId && o.status==='producing').reduce((n,o)=>n+o.qty,0);
@@ -18,7 +19,7 @@ export function addProduct(state, input) {
   const sku=text(input.sku), msku=text(input.msku), fnsku=text(input.fnsku), name=text(input.name);
   if(!sku||!msku||!fnsku||!name) throw Error('请填写产品名称、货号、MSKU 和 FNSKU');
   if(state.products.some(p=>p.msku.toLowerCase()===msku.toLowerCase())) throw Error('该 MSKU 已存在，请勿重复建档');
-  const p={id:id(),sku,msku,fnsku,name,stock:qty(input.stock,true),transit:qty(input.transit,true),fba:qty(input.fba,true),threshold:qty(input.threshold,true),color:state.products.length%5};
+  const p={id:id(),sku,msku,fnsku,name,stock:qty(input.stock,true),transit:qty(input.transit,true),fba:qty(input.fba,true),threshold:qty(input.threshold,true),country:text(input.country),fbaTransitLots:structuredClone(input.fbaTransitLots||[]),color:state.products.length%5};
   if(input.stockLots!==undefined)p.stockLots=structuredClone(input.stockLots);validateStockLots(p);
   state.products.push(p); record(state,p,'期初建档',p.stock,p.transit,p.fba,'初始库存'); return p;
 }
@@ -39,7 +40,9 @@ export function addShipment(state,input) {
   if(amount>available(state,p)) throw Error('可用现货不足，当前可分配 '+available(state,p)+' 件');
   const productionRef=text(input.productionRef);if(productionRef&&!state.orders.some(o=>o.ref===productionRef&&o.productId===p.id)&&!ensureStockLots(p).some(l=>l.ref===productionRef))throw Error('生产订单编号不存在或产品不匹配');
   const eta=text(input.eta);if(eta){date(eta);if(eta<shipDate)throw Error('预计到货时间不能早于计划出货日期');}
-  const candidate={id:id(),ref,productId:p.id,qty:amount,date:shipDate,status:'planned',destination:text(input.destination)||'FBA 仓库',shop:text(input.shop),productionRef,cbm:decimal(input.cbm,'CBM',true),eta,shippedAt:''};planStockLots(state,p,candidate);state.shipments.unshift(candidate);
+  const detailKeys=['batchNote','poId','attention','warehouse','unitsPerCarton','cartons','length','width','height','netKg','grossKg','netWeight','grossWeight','address','warehouseType','asin','url','declaredPrice'];
+  const details=detailKeys.some(k=>Object.hasOwn(input,k))?normalizeLogistics(input,'shipmentDrafts'):null;
+  const candidate={...(details?Object.fromEntries(detailKeys.map(k=>[k,details[k]===undefined?'':details[k]])):{}),id:id(),ref,productId:p.id,qty:amount,date:shipDate,status:'planned',destination:text(input.destination)||'FBA 仓库',shop:text(input.shop),productionRef,cbm:decimal(input.cbm,'CBM',true),eta,shippedAt:''};planStockLots(state,p,candidate);state.shipments.unshift(candidate);
 }
 export function ship(state, shipmentId) {
   const s=state.shipments.find(s=>s.id===shipmentId); if(!s||s.status!=='planned') throw Error('该出货计划已处理或不存在');
@@ -52,6 +55,7 @@ export function arrive(state,shipmentId) {
   const p=product(state,s.productId); if(p.transit<s.qty) throw Error('在途库存不足，请核对');
   p.transit-=s.qty; p.fba+=s.qty; s.status='arrived'; record(state,p,'FBA 到仓',0,-s.qty,s.qty,s.ref);
 }
+export function activateShipmentDraft(state,recordId,dateValue){const r=state.shipmentDrafts.find(r=>r.id===recordId);if(!r)throw Error('出货草稿不存在');addShipment(state,{...r,date:dateValue});state.shipmentDrafts=state.shipmentDrafts.filter(x=>x.id!==recordId);}
 export function cancelShipment(state,shipmentId) {
   const s=state.shipments.find(s=>s.id===shipmentId); if(!s||s.status!=='planned') throw Error('仅待出货计划可以取消'); s.status='cancelled';
 }
@@ -59,7 +63,7 @@ export function adjust(state,input) {
   const p=product(state,input.productId), amount=qty(input.qty); const reason=text(input.reason);
   if(!reason) throw Error('请填写调整原因');
   if(input.kind==='sale') { if(amount>p.fba) throw Error('FBA 在售库存不足'); p.fba-=amount; record(state,p,'FBA 销售',0,0,-amount,reason); }
-  else if(input.kind==='transit-receipt') { const tracked=state.shipments.filter(sh=>sh.productId===p.id&&sh.status==='shipped').reduce((n,sh)=>n+sh.qty,0);if(amount>p.transit-tracked) throw Error('期初在途可转入数量不足；关联出货单请在出货计划中确认到仓');p.transit-=amount;p.fba+=amount;record(state,p,'期初在途到仓',0,-amount,amount,reason); }
+  else if(input.kind==='transit-receipt') { const tracked=state.shipments.filter(sh=>sh.productId===p.id&&sh.status==='shipped').reduce((n,sh)=>n+sh.qty,0);if(amount>p.transit-tracked) throw Error('期初在途可转入数量不足；关联出货单请在出货计划中确认到仓');const dated=p.fbaTransitLots||[];let remaining=Math.max(0,amount-(p.transit-tracked-dated.reduce((n,l)=>n+l.qty,0)));for(const l of dated){const taken=Math.min(l.qty,remaining);l.qty-=taken;remaining-=taken;}p.fbaTransitLots=dated.filter(l=>l.qty>0);p.transit-=amount;p.fba+=amount;record(state,p,'期初在途到仓',0,-amount,amount,reason); }
   else if(input.kind==='in') {addStockLot(p,'',amount); p.stock+=amount; record(state,p,'现货入库',amount,0,0,reason); }
   else if(input.kind==='out') { if(amount>available(state,p)) throw Error('可用现货不足，已预占库存不可扣减');const free=planStockLots(state,p).free;deductStockLots(p,takeLots(free,amount)); p.stock-=amount; record(state,p,'现货扣减',-amount,0,0,reason); }
   else throw Error('未知调整类型');
@@ -75,15 +79,15 @@ export function updateShipmentETA(state,shipmentId,value){const s=state.shipment
 export function validateState(s) {
   if(s?.version===1){s.version=2;s.sales=[];s.costBases=[];s.costBills=[];s.estimates=[];s.jpSettings=jpDefaults();s.planning=defaultPlanning();}
 
-  if(s?.version===2&&s.europeEstimates===undefined)s.europeEstimates=[];
-  if(!s || s.version!==2 || typeof s.demo!=='boolean' || !Number.isInteger(s.reminderDays) || s.reminderDays<0 || s.reminderDays>30 || !['products','orders','shipments','ledger','sales','costBases','costBills','estimates','europeEstimates'].every(k=>Array.isArray(s[k]))) throw Error('备份格式不正确');
+  if(s?.version===2){for(const key of ['europeEstimates','shipmentDrafts','freightRecords'])if(s[key]===undefined)s[key]=[];}
+  if(!s || s.version!==2 || typeof s.demo!=='boolean' || !Number.isInteger(s.reminderDays) || s.reminderDays<0 || s.reminderDays>30 || !['products','orders','shipments','ledger','sales','costBases','costBills','estimates','europeEstimates','shipmentDrafts','freightRecords'].every(k=>Array.isArray(s[k]))) throw Error('备份格式不正确');
   const seen=new Set(), skus=new Set();
   for(const p of s.products) {
     if(!p.id||seen.has(p.id)||!['id','name','sku','msku','fnsku'].every(k=>typeof p[k]==='string'&&p[k].trim())) throw Error('产品档案无效');
     seen.add(p.id); if(skus.has(p.msku.toLowerCase())) throw Error('MSKU 重复'); skus.add(p.msku.toLowerCase());
     ['stock','transit','fba','threshold'].forEach(k=>{ if(typeof p[k]!=='number') throw Error('库存数量必须为数字');qty(p[k],true); });
   }
-  for(const p of s.products)validateStockLots(p);
+  for(const p of s.products){validateStockLots(p);p.country=text(p.country);if(p.fbaTransitLots===undefined)p.fbaTransitLots=[];if(!Array.isArray(p.fbaTransitLots))throw Error('FBA在途日期明细无效');for(const l of p.fbaTransitLots){if(typeof l.qty!=='number')throw Error('FBA在途批次数量必须为数字');qty(l.qty);date(l.eta);}const tracked=s.shipments.filter(sh=>sh.productId===p.id&&sh.status==='shipped').reduce((n,sh)=>n+sh.qty,0);if(p.fbaTransitLots.reduce((n,l)=>n+l.qty,0)>p.transit-tracked)throw Error('FBA日期明细与在途数量重复或不一致');}
   const ids=new Set();
   for(const o of s.orders) { product(s,o.productId);if(typeof o.qty!=='number') throw Error('订单数量无效');qty(o.qty);date(o.due); if(!o.id||ids.has(o.id)||typeof o.ref!=='string'||!['producing','received'].includes(o.status)) throw Error('订单数据无效'); ids.add(o.id); }
   for(const sh of s.shipments) { product(s,sh.productId);if(typeof sh.qty!=='number') throw Error('出货数量无效');qty(sh.qty);date(sh.date); if(!sh.id||ids.has(sh.id)||typeof sh.ref!=='string'||!['planned','shipped','arrived','cancelled'].includes(sh.status)) throw Error('出货数据无效'); ids.add(sh.id); }
@@ -107,6 +111,7 @@ export function validateState(s) {
   for(const sale of s.sales){if(!sale.id)throw Error('销量记录无效');addSales(check,sale);}
   for(const base of s.costBases){if(!base.id)throw Error('历史成本无效');addCostBaseline(check,base);}
   for(const bill of s.costBills){if(!bill.id)throw Error('账单记录无效');addActualBill(check,bill);const rebuilt=check.costBills.at(-1);for(let i=0;i<bill.lines.length;i++)if(Math.abs(rebuilt.lines[i].freight-bill.lines[i].freight)>0.000001||!Number.isFinite(bill.lines[i].freight))throw Error('账单分摊金额不一致');}
+  const logisticsCheck={shipmentDrafts:[],freightRecords:[]};for(const kind of ['shipmentDrafts','freightRecords'])for(const r of s[kind]){if(!r.id)throw Error('物流记录缺少编号');if(kind==='shipmentDrafts')product(s,r.productId);addLogistics(logisticsCheck,r,kind);}
   return s;
 }
 export function demoState() {

@@ -21,7 +21,7 @@ export function addSales(state,input){
  const start=validDate(input.start),end=validDate(input.end),shop=String(input.shop||'').trim();if(!shop)throw Error('出货店铺不能为空');
  if(daysUntil(end,start)!==6)throw Error('每条周销量必须覆盖连续 7 天（含首尾）');if(end>=today())throw Error('仅导入截至昨天的完整周销量');
  if(state.sales.some(s=>s.productId===p.id&&s.shop===shop&&s.start<=end&&s.end>=start))throw Error('该店铺产品的销量周期重叠，请勿重复导入');
- state.sales.push({id:id(),productId:p.id,shop,start,end,qty:integer(input.qty,'销量',true)});
+ state.sales.push({id:id(),productId:p.id,shop,sellerSku:String(input.sellerSku||p.msku).trim(),start,end,qty:integer(input.qty,'销量',true)});
 }
 export function addCostBaseline(state,input){
  const p=state.products.find(p=>p.id===input.productId);if(!p)throw Error('产品不存在');if(state.costBases.some(b=>b.productId===p.id))throw Error('该产品已有历史成本基数');

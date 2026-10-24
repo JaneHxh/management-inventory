@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyState,addProduct,addOrder,addShipment,ship,updateShipmentETA,validateState,today} from '../src/model.js';
+import {emptyState,activateShipmentDraft,addProduct,addOrder,addShipment,ship,updateShipmentETA,validateState,today} from '../src/model.js';
 import {dayAfter,monthsAfter,season,forecast} from '../src/planning.js';
 import {japanQuote,addSales,addActualBill,addCostBaseline,weightedCost} from '../src/costing.js';
 import {parseCSV,suggestMapping,prepareImport,templateCSV,schemas} from '../src/importer.js';
@@ -8,8 +8,8 @@ const make=()=>{const s=emptyState();const p=addProduct(s,{name:'收纳箱',sku:
 const importFile=(s,type,csv=templateCSV(type))=>{const t=parseCSV(csv);return prepareImport(s,t,type,suggestMapping(t.headers,type));};
 test('生产和出货字段与模板顺序一致，小数尺寸与成本保留，ETA 可晚补',()=>{
  const [s,p]=make();const result=importFile(s,'orders');assert.equal(result.errors.length,0);const o=result.next.orders[0];assert.equal(o.length,60);assert.equal(o.netWeight,14);assert.equal(o.unitCost,25);assert.equal(o.warehouseCode,'CN-YW');
- const out=importFile(result.next,'shipments');assert.equal(out.errors.length,0);const sh=out.next.shipments[0];assert.equal(sh.cbm,1.2);assert.equal(sh.shop,'日本店铺');assert.equal(sh.eta,'');ship(out.next,sh.id);updateShipmentETA(out.next,sh.id,dayAfter(today(),60));validateState(out.next);
- assert.deepEqual(schemas.shipments.fields.map(f=>f[1]),['出货单号','出货店铺','生产订单编号','产品名称','货号','MSKU','FNSKU','数量','cbm','计划出货日期','目的仓库','预计到货时间']);
+ const out=importFile(result.next,'shipments');assert.equal(out.errors.length,0);assert.equal(out.next.shipmentDrafts.length,1);activateShipmentDraft(out.next,out.next.shipmentDrafts[0].id,today());const sh=out.next.shipments[0];assert.equal(sh.cbm,1.2);assert.equal(sh.shop,'日本店铺');assert.equal(sh.eta,'');ship(out.next,sh.id);updateShipmentETA(out.next,sh.id,dayAfter(today(),60));validateState(out.next);
+ assert.equal(schemas.shipments.fields.length,27);
  assert.throws(()=>updateShipmentETA(out.next,sh.id,'2020-01-01'),/不能早于/);
 });
 test('生产订单链接核对产品，重量不能倒置，产品档案不匹配整批拒绝',()=>{

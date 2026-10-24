@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {parseCSV,tableFromRows,suggestMapping,prepareImport,templateCSV} from '../src/importer.js';
-import {emptyState,available,ship,arrive} from '../src/model.js';
+import {emptyState,available,ship,arrive,activateShipmentDraft,today} from '../src/model.js';
 function load(s,csv,type){const table=parseCSV(csv);return prepareImport(s,table,type,suggestMapping(table.headers,type));}
 test('CSV UTF-8 BOM、引号、逗号、换行及双引号转义',()=>{
  const table=parseCSV('\uFEFF名称,备注\r\n"收纳,箱","第一行\n第二行"\r\n"双""引号",ok');assert.deepEqual(table.headers,['名称','备注']);assert.equal(table.entries[0].cells[0],'收纳,箱');assert.equal(table.entries[0].cells[1],'第一行\n第二行');assert.equal(table.entries[1].cells[0],'双"引号');assert.throws(()=>parseCSV('标题\n"未结束'),/未闭合/);
@@ -9,7 +9,7 @@ test('CSV UTF-8 BOM、引号、逗号、换行及双引号转义',()=>{
 test('模板可直接导入：库存 → 生产订单 → 出货计划，不改变原状态',()=>{
  const s=emptyState();const products=load(s,templateCSV('products'),'products');assert.equal(products.errors.length,0);assert.equal(s.products.length,0);assert.equal(products.next.products[0].stock,100);
  const orders=load(products.next,templateCSV('orders'),'orders');assert.equal(orders.next.orders.length,products.next.orders.length+1);assert.equal(orders.next.products[0].stock,100);
- const shipments=load(orders.next,templateCSV('shipments'),'shipments');assert.equal(available(shipments.next,shipments.next.products[0]),50);assert.equal(shipments.next.products[0].stock,100);
+ const shipments=load(orders.next,templateCSV('shipments'),'shipments');assert.equal(shipments.next.shipmentDrafts.length,1);assert.equal(available(shipments.next,shipments.next.products[0]),100);activateShipmentDraft(shipments.next,shipments.next.shipmentDrafts[0].id,today());assert.equal(available(shipments.next,shipments.next.products[0]),50);assert.equal(shipments.next.products[0].stock,100);
  ship(shipments.next,shipments.next.shipments[0].id);assert.equal(shipments.next.products[0].stock,50);arrive(shipments.next,shipments.next.shipments[0].id);assert.equal(shipments.next.products[0].fba,50);
 });
 test('批量任一行出错则整批不可提交，重复 MSKU / 单号拦截',()=>{

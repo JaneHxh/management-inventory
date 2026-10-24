@@ -1,7 +1,8 @@
+import {addLogistics} from './logistics.js';
 import {validateState,addProduct,addOrder,receiveOrder,addShipment,ship,arrive,id} from './model.js';
 import {addStockLot,parseOrderPairs,ensureStockLots} from './domestic-stock.js';
 import {addSales,addCostBaseline,addActualBill} from './costing.js';
-export const recordNames={products:'产品与库存',orders:'生产订单',shipments:'出货计划',sales:'每周销量',costBases:'历史成本',costBills:'实际账单',estimates:'日本预估',europeEstimates:'英德预估',ledger:'库存流水'};
+export const recordNames={shipmentDrafts:'出货草稿',freightRecords:'原始头程账单',products:'产品与库存',orders:'生产订单',shipments:'出货计划',sales:'每周销量',costBases:'历史成本',costBills:'实际账单',estimates:'日本预估',europeEstimates:'英德预估',ledger:'库存流水'};
 const escapeId=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const recordActions=(type,recordId)=>{const id=escapeId(recordId);return `<span class="record-actions"><button type="button" class="small-btn" data-action="edit-record" data-type="${type}" data-id="${id}">编辑</button>${type==='ledger'?'':`<button type="button" class="text-btn danger" data-action="delete-record" data-type="${type}" data-id="${id}">删除</button>`}</span>`;};
 const audit=(s,pid,action,reference,delta={})=>s.ledger.unshift({id:id(),productId:pid,action,reference,at:new Date().toISOString(),stock:delta.stock||0,transit:delta.transit||0,fba:delta.fba||0});
@@ -18,6 +19,7 @@ function undo(s,type,r){
  }
 }
 function apply(s,type,data,old){
+ if(['shipmentDrafts','freightRecords'].includes(type)){addLogistics(s,data,type);s[type].at(-1).id=old.id;return;}
  if(type==='orders'){addOrder(s,data);const r=s.orders[0];r.id=old.id;if(data.status==='received')receiveOrder(s,r.id);else if(data.status!=='producing')throw Error('生产状态无效');return;}
  if(type==='shipments'){
   if(data.status==='cancelled'){const check=structuredClone(s),p=check.products.find(p=>p.id===data.productId);if(!p)throw Error('产品不存在');p.stock+=Number(data.qty);addStockLot(p,'',Number(data.qty));addShipment(check,data);s.shipments.unshift({...check.shipments[0],id:old.id,status:'cancelled',shippedAt:''});return;}
@@ -35,7 +37,7 @@ export function reviseRecord(state,type,recordId,input=null){
  }
  if(type==='products'){
   if(input===null){
-   const linked=['orders','shipments','sales','costBases'].some(k=>s[k].some(r=>r.productId===old.id))||['costBills','estimates','europeEstimates'].some(k=>s[k].some(r=>r.lines.some(l=>l.productId===old.id)));
+   const linked=['orders','shipments','sales','costBases','shipmentDrafts'].some(k=>s[k].some(r=>r.productId===old.id))||['costBills','estimates','europeEstimates'].some(k=>s[k].some(r=>r.lines.some(l=>l.productId===old.id)));
    if(linked)throw Error('该产品还有关联订单、出货、销量或费用，请先删除关联业务记录，再删除产品');
    s.products.splice(index,1);s.ledger=s.ledger.filter(l=>l.productId!==old.id);
   }else{
