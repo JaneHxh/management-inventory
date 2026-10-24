@@ -1,9 +1,10 @@
+import {europeQuote} from './europe-freight.js';
 import {defaultPlanning} from './planning.js';
 import {decimal,integer,validDate,addSales,addCostBaseline,addActualBill,jpDefaults,japanQuote} from './costing.js';
 export const today = () => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit'}).format(new Date());
 export const id = () => crypto.randomUUID();
 export function daysUntil(date, base = today()) { return Math.round((Date.parse(date + 'T00:00:00Z') - Date.parse(base + 'T00:00:00Z')) / 86400000); }
-export const emptyState = () => ({version:2, demo:false, reminderDays:7, products:[], orders:[], shipments:[], ledger:[], sales:[], costBases:[], costBills:[], estimates:[], jpSettings:jpDefaults(), planning:defaultPlanning()});
+export const emptyState = () => ({version:2, demo:false, reminderDays:7, products:[], orders:[], shipments:[], ledger:[], sales:[], costBases:[], costBills:[], estimates:[], europeEstimates:[], jpSettings:jpDefaults(), planning:defaultPlanning()});
 export const reserved = (state, productId) => state.shipments.filter(s => s.productId === productId && s.status === 'planned').reduce((n,s) => n+s.qty,0);
 export const available = (state, p) => p.stock - reserved(state,p.id);
 export const producing = (state, productId) => state.orders.filter(o=>o.productId===productId && o.status==='producing').reduce((n,o)=>n+o.qty,0);
@@ -70,7 +71,8 @@ export function updateShipmentETA(state,shipmentId,value){const s=state.shipment
 export function validateState(s) {
   if(s?.version===1){s.version=2;s.sales=[];s.costBases=[];s.costBills=[];s.estimates=[];s.jpSettings=jpDefaults();s.planning=defaultPlanning();}
 
-  if(!s || s.version!==2 || typeof s.demo!=='boolean' || !Number.isInteger(s.reminderDays) || s.reminderDays<0 || s.reminderDays>30 || !['products','orders','shipments','ledger','sales','costBases','costBills','estimates'].every(k=>Array.isArray(s[k]))) throw Error('备份格式不正确');
+  if(s?.version===2&&s.europeEstimates===undefined)s.europeEstimates=[];
+  if(!s || s.version!==2 || typeof s.demo!=='boolean' || !Number.isInteger(s.reminderDays) || s.reminderDays<0 || s.reminderDays>30 || !['products','orders','shipments','ledger','sales','costBases','costBills','estimates','europeEstimates'].every(k=>Array.isArray(s[k]))) throw Error('备份格式不正确');
   const seen=new Set(), skus=new Set();
   for(const p of s.products) {
     if(!p.id||seen.has(p.id)||!['id','name','sku','msku','fnsku'].every(k=>typeof p[k]==='string'&&p[k].trim())) throw Error('产品档案无效');
@@ -94,6 +96,7 @@ export function validateState(s) {
   if(!s.jpSettings||Object.keys(jpDefaults()).some(k=>typeof s.jpSettings[k]!=='number'))throw Error('日本费用参数无效');
   japanQuote([{qty:1,cbm:1,cartons:1,unitCost:0,declaredPrice:0,salePrice:0,platformPerUnit:0}],s.jpSettings);
   const quoteRefs=new Set();for(const q of s.estimates){if(!q.id||!q.ref||quoteRefs.has(q.ref)||q.market!=='JP')throw Error('预估记录无效');quoteRefs.add(q.ref);for(const l of q.lines)product(s,l.productId);japanQuote(q.lines,q.settings);}
+  const europeanRefs=new Set();for(const q of s.europeEstimates){if(!q.id||typeof q.ref!=='string'||!q.ref.trim()||europeanRefs.has(q.ref))throw Error('英德预估单号无效或重复');europeanRefs.add(q.ref);if(typeof q.source!=='string'||!q.source.trim())throw Error('英德报价缺少来源');validDate(q.rateDate,'报价日期');for(const l of q.lines)product(s,l.productId);europeQuote(q.lines,q.settings,q.groups,q.market);}
   const check={products:s.products,sales:[],costBases:[],costBills:[]};
   for(const sale of s.sales){if(!sale.id)throw Error('销量记录无效');addSales(check,sale);}
   for(const base of s.costBases){if(!base.id)throw Error('历史成本无效');addCostBaseline(check,base);}
@@ -122,6 +125,7 @@ export function demoState() {
   if(!s.jpSettings||Object.keys(jpDefaults()).some(k=>typeof s.jpSettings[k]!=='number'))throw Error('日本费用参数无效');
   japanQuote([{qty:1,cbm:1,cartons:1,unitCost:0,declaredPrice:0,salePrice:0,platformPerUnit:0}],s.jpSettings);
   const quoteRefs=new Set();for(const q of s.estimates){if(!q.id||!q.ref||quoteRefs.has(q.ref)||q.market!=='JP')throw Error('预估记录无效');quoteRefs.add(q.ref);for(const l of q.lines)product(s,l.productId);japanQuote(q.lines,q.settings);}
+  const europeanRefs=new Set();for(const q of s.europeEstimates){if(!q.id||typeof q.ref!=='string'||!q.ref.trim()||europeanRefs.has(q.ref))throw Error('英德预估单号无效或重复');europeanRefs.add(q.ref);if(typeof q.source!=='string'||!q.source.trim())throw Error('英德报价缺少来源');validDate(q.rateDate,'报价日期');for(const l of q.lines)product(s,l.productId);europeQuote(q.lines,q.settings,q.groups,q.market);}
   const check={products:s.products,sales:[],costBases:[],costBills:[]};
   for(const sale of s.sales){if(!sale.id)throw Error('销量记录无效');addSales(check,sale);}
   for(const base of s.costBases){if(!base.id)throw Error('历史成本无效');addCostBaseline(check,base);}
