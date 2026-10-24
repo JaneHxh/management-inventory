@@ -8,14 +8,14 @@ test('CSV UTF-8 BOM、引号、逗号、换行及双引号转义',()=>{
 });
 test('模板可直接导入：库存 → 生产订单 → 出货计划，不改变原状态',()=>{
  const s=emptyState();const products=load(s,templateCSV('products'),'products');assert.equal(products.errors.length,0);assert.equal(s.products.length,0);assert.equal(products.next.products[0].stock,100);
- const orders=load(products.next,templateCSV('orders'),'orders');assert.equal(orders.next.orders.length,1);assert.equal(orders.next.products[0].stock,100);
+ const orders=load(products.next,templateCSV('orders'),'orders');assert.equal(orders.next.orders.length,products.next.orders.length+1);assert.equal(orders.next.products[0].stock,100);
  const shipments=load(orders.next,templateCSV('shipments'),'shipments');assert.equal(available(shipments.next,shipments.next.products[0]),50);assert.equal(shipments.next.products[0].stock,100);
- ship(shipments.next,shipments.next.shipments[0].id);assert.equal(shipments.next.products[0].stock,50);arrive(shipments.next,shipments.next.shipments[0].id);assert.equal(shipments.next.products[0].fba,70);
+ ship(shipments.next,shipments.next.shipments[0].id);assert.equal(shipments.next.products[0].stock,50);arrive(shipments.next,shipments.next.shipments[0].id);assert.equal(shipments.next.products[0].fba,50);
 });
 test('批量任一行出错则整批不可提交，重复 MSKU / 单号拦截',()=>{
  const s=load(emptyState(),templateCSV('products'),'products').next;
  const result=load(s,templateCSV('products'),'products');assert.equal(result.next,null);assert.match(result.errors[0].message,/已存在/);assert.equal(s.products.length,1);
- const csv='订单编号,MSKU,数量,货好日期\nNEW,BX-WH-US,10,2026-11-01\nBAD,UNKNOWN,10,2026-11-01';const errors=load(s,csv,'orders');assert.equal(errors.next,null);assert.equal(errors.errors[0].row,3);assert.equal(s.orders.length,0);
+ const csv='订单编号,MSKU,数量,货好日期\nNEW,BX-WH-US,10,2026-11-01\nBAD,UNKNOWN,10,2026-11-01';const errors=load(s,csv,'orders');assert.equal(errors.next,null);assert.equal(errors.errors[0].row,3);assert.equal(s.orders.length,1);
  const orders=load(s,templateCSV('orders'),'orders').next;assert.equal(load(orders,templateCSV('orders'),'orders').next,null);
 });
 test('同批计划累计预占，超额整批失败；无效日期、负数和缺列报错',()=>{

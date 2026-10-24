@@ -35,7 +35,7 @@ test('备份可往返，拒绝损坏数据和不一致库存',()=>{
  const [s,p]=make();assert.deepEqual(validateState(JSON.parse(JSON.stringify(s))),s);
  const corrupt=structuredClone(s);corrupt.products[0].stock='100';assert.throws(()=>validateState(corrupt));
  assert.throws(()=>validateState({version:2}));
- addShipment(s,{productId:p.id,ref:'S1',qty:80,date:'2026-10-30'});p.stock=20;assert.throws(()=>validateState(s),/预占/);
+ addShipment(s,{productId:p.id,ref:'S1',qty:80,date:'2026-10-30'});p.stock=20;p.stockLots[0].qty=20;assert.throws(()=>validateState(s),/预占/);
  validateState(demoState());
 });
 test('默认提前 7 天，日期按自然日判断，包含今天和逾期',()=>{

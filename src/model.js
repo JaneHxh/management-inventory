@@ -1,3 +1,4 @@
+import {ensureStockLots,validateStockLots,addStockLot,planStockLots,takeLots,deductStockLots,parseOrderPairs} from './domestic-stock.js';
 import {europeQuote} from './europe-freight.js';
 import {defaultPlanning} from './planning.js';
 import {decimal,integer,validDate,addSales,addCostBaseline,addActualBill,jpDefaults,japanQuote} from './costing.js';
@@ -18,6 +19,7 @@ export function addProduct(state, input) {
   if(!sku||!msku||!fnsku||!name) throw Error('请填写产品名称、货号、MSKU 和 FNSKU');
   if(state.products.some(p=>p.msku.toLowerCase()===msku.toLowerCase())) throw Error('该 MSKU 已存在，请勿重复建档');
   const p={id:id(),sku,msku,fnsku,name,stock:qty(input.stock,true),transit:qty(input.transit,true),fba:qty(input.fba,true),threshold:qty(input.threshold,true),color:state.products.length%5};
+  if(input.stockLots!==undefined)p.stockLots=structuredClone(input.stockLots);validateStockLots(p);
   state.products.push(p); record(state,p,'期初建档',p.stock,p.transit,p.fba,'初始库存'); return p;
 }
 export function addOrder(state,input) {
@@ -28,20 +30,21 @@ export function addOrder(state,input) {
 }
 export function receiveOrder(state, orderId) {
   const o=state.orders.find(o=>o.id===orderId); if(!o||o.status!=='producing') throw Error('该订单已入库或不存在');
-  const p=product(state,o.productId); p.stock+=o.qty; o.status='received'; record(state,p,'生产入库',o.qty,0,0,o.ref);
+  const p=product(state,o.productId);addStockLot(p,o.ref,o.qty); p.stock+=o.qty; o.status='received'; record(state,p,'生产入库',o.qty,0,0,o.ref);
 }
 export function addShipment(state,input) {
   const p=product(state,input.productId), amount=qty(input.qty), shipDate=date(input.date), ref=text(input.ref);
   if(!ref) throw Error('请填写出货单号');
   if(state.shipments.some(s=>s.ref===ref&&s.productId===p.id&&text(s.shop)===text(input.shop))) throw Error('出货单号已存在（同店铺同产品）');
   if(amount>available(state,p)) throw Error('可用现货不足，当前可分配 '+available(state,p)+' 件');
-  const productionRef=text(input.productionRef);if(productionRef&&!state.orders.some(o=>o.ref===productionRef&&o.productId===p.id))throw Error('生产订单编号不存在或产品不匹配');
+  const productionRef=text(input.productionRef);if(productionRef&&!state.orders.some(o=>o.ref===productionRef&&o.productId===p.id)&&!ensureStockLots(p).some(l=>l.ref===productionRef))throw Error('生产订单编号不存在或产品不匹配');
   const eta=text(input.eta);if(eta){date(eta);if(eta<shipDate)throw Error('预计到货时间不能早于计划出货日期');}
-  state.shipments.unshift({id:id(),ref,productId:p.id,qty:amount,date:shipDate,status:'planned',destination:text(input.destination)||'FBA 仓库',shop:text(input.shop),productionRef,cbm:decimal(input.cbm,'CBM',true),eta,shippedAt:''});
+  const candidate={id:id(),ref,productId:p.id,qty:amount,date:shipDate,status:'planned',destination:text(input.destination)||'FBA 仓库',shop:text(input.shop),productionRef,cbm:decimal(input.cbm,'CBM',true),eta,shippedAt:''};planStockLots(state,p,candidate);state.shipments.unshift(candidate);
 }
 export function ship(state, shipmentId) {
   const s=state.shipments.find(s=>s.id===shipmentId); if(!s||s.status!=='planned') throw Error('该出货计划已处理或不存在');
   const p=product(state,s.productId); if(p.stock<s.qty) throw Error('现货不足');
+  const allocation=planStockLots(state,p).allocations.get(s.id);deductStockLots(p,allocation);s.stockAllocation=allocation;
   p.stock-=s.qty; p.transit+=s.qty; s.status='shipped';s.shippedAt=today(); record(state,p,'确认出货',-s.qty,s.qty,0,s.ref);
 }
 export function arrive(state,shipmentId) {
@@ -57,10 +60,11 @@ export function adjust(state,input) {
   if(!reason) throw Error('请填写调整原因');
   if(input.kind==='sale') { if(amount>p.fba) throw Error('FBA 在售库存不足'); p.fba-=amount; record(state,p,'FBA 销售',0,0,-amount,reason); }
   else if(input.kind==='transit-receipt') { const tracked=state.shipments.filter(sh=>sh.productId===p.id&&sh.status==='shipped').reduce((n,sh)=>n+sh.qty,0);if(amount>p.transit-tracked) throw Error('期初在途可转入数量不足；关联出货单请在出货计划中确认到仓');p.transit-=amount;p.fba+=amount;record(state,p,'期初在途到仓',0,-amount,amount,reason); }
-  else if(input.kind==='in') { p.stock+=amount; record(state,p,'现货入库',amount,0,0,reason); }
-  else if(input.kind==='out') { if(amount>available(state,p)) throw Error('可用现货不足，已预占库存不可扣减'); p.stock-=amount; record(state,p,'现货扣减',-amount,0,0,reason); }
+  else if(input.kind==='in') {addStockLot(p,'',amount); p.stock+=amount; record(state,p,'现货入库',amount,0,0,reason); }
+  else if(input.kind==='out') { if(amount>available(state,p)) throw Error('可用现货不足，已预占库存不可扣减');const free=planStockLots(state,p).free;deductStockLots(p,takeLots(free,amount)); p.stock-=amount; record(state,p,'现货扣减',-amount,0,0,reason); }
   else throw Error('未知调整类型');
 }
+export function setStockOrderDetails(state,productId,value){const p=product(state,productId),lots=parseOrderPairs(value);if(lots.length&&lots.reduce((n,l)=>n+l.qty,0)!==p.stock)throw Error('现货订单数量合计必须等于现货数量');const candidate={...p,stockLots:lots.length?lots:(p.stock?[{ref:'',qty:p.stock}]:[])};for(const old of ensureStockLots(p))if(old.ref&&!candidate.stockLots.some(l=>l.ref===old.ref))candidate.stockLots.push({ref:old.ref,qty:0});planStockLots(state,candidate);p.stockLots=candidate.stockLots;record(state,p,'现货订单关联更新',0,0,0,'补充现货订单号与数量');}
 export function orderDetails(input){
  const result={warehouse:text(input.warehouse),warehouseCode:text(input.warehouseCode)};
  for(const key of ['unitCost','length','width','height','grossWeight','netWeight'])result[key]=decimal(input[key],key,true);
@@ -79,6 +83,7 @@ export function validateState(s) {
     seen.add(p.id); if(skus.has(p.msku.toLowerCase())) throw Error('MSKU 重复'); skus.add(p.msku.toLowerCase());
     ['stock','transit','fba','threshold'].forEach(k=>{ if(typeof p[k]!=='number') throw Error('库存数量必须为数字');qty(p[k],true); });
   }
+  for(const p of s.products)validateStockLots(p);
   const ids=new Set();
   for(const o of s.orders) { product(s,o.productId);if(typeof o.qty!=='number') throw Error('订单数量无效');qty(o.qty);date(o.due); if(!o.id||ids.has(o.id)||typeof o.ref!=='string'||!['producing','received'].includes(o.status)) throw Error('订单数据无效'); ids.add(o.id); }
   for(const sh of s.shipments) { product(s,sh.productId);if(typeof sh.qty!=='number') throw Error('出货数量无效');qty(sh.qty);date(sh.date); if(!sh.id||ids.has(sh.id)||typeof sh.ref!=='string'||!['planned','shipped','arrived','cancelled'].includes(sh.status)) throw Error('出货数据无效'); ids.add(sh.id); }
@@ -88,8 +93,9 @@ export function validateState(s) {
   for(const sh of s.shipments){
     sh.shop=text(sh.shop);sh.productionRef=text(sh.productionRef);sh.cbm=decimal(sh.cbm,'CBM',true);sh.eta=text(sh.eta);sh.shippedAt=text(sh.shippedAt);
     if(sh.eta){date(sh.eta);if(sh.eta<(sh.shippedAt||sh.date))throw Error('预计到货时间早于出货');}if(sh.shippedAt)date(sh.shippedAt);
-    if(sh.productionRef&&!s.orders.some(o=>o.ref===sh.productionRef&&o.productId===sh.productId))throw Error('关联生产订单无效');
+    if(sh.productionRef&&!s.orders.some(o=>o.ref===sh.productionRef&&o.productId===sh.productId)&&!ensureStockLots(product(s,sh.productId)).some(l=>l.ref===sh.productionRef))throw Error('关联生产订单无效');
   }
+  for(const p of s.products)planStockLots(s,p);
   const cfg=s.planning;if(!cfg||!Number.isFinite(cfg.multiplier)||cfg.multiplier<1.5||cfg.multiplier>2)throw Error('季节倍率须在 1.5–2 之间');
   for(const key of ['factoryMonths','planningDays','domesticDays','seaDays','fbaDays','lookbackWeeks']){integer(cfg[key],key);if(cfg[key]>365)throw Error('提前期设置过大');}
   if(cfg.factoryMonths>12||cfg.lookbackWeeks>52)throw Error('生产月数或销量回看周数无效');
@@ -117,8 +123,9 @@ export function demoState() {
   for(const sh of s.shipments){
     sh.shop=text(sh.shop);sh.productionRef=text(sh.productionRef);sh.cbm=decimal(sh.cbm,'CBM',true);sh.eta=text(sh.eta);sh.shippedAt=text(sh.shippedAt);
     if(sh.eta){date(sh.eta);if(sh.eta<(sh.shippedAt||sh.date))throw Error('预计到货时间早于出货');}if(sh.shippedAt)date(sh.shippedAt);
-    if(sh.productionRef&&!s.orders.some(o=>o.ref===sh.productionRef&&o.productId===sh.productId))throw Error('关联生产订单无效');
+    if(sh.productionRef&&!s.orders.some(o=>o.ref===sh.productionRef&&o.productId===sh.productId)&&!ensureStockLots(product(s,sh.productId)).some(l=>l.ref===sh.productionRef))throw Error('关联生产订单无效');
   }
+  for(const p of s.products)planStockLots(s,p);
   const cfg=s.planning;if(!cfg||!Number.isFinite(cfg.multiplier)||cfg.multiplier<1.5||cfg.multiplier>2)throw Error('季节倍率须在 1.5–2 之间');
   for(const key of ['factoryMonths','planningDays','domesticDays','seaDays','fbaDays','lookbackWeeks']){integer(cfg[key],key);if(cfg[key]>365)throw Error('提前期设置过大');}
   if(cfg.factoryMonths>12||cfg.lookbackWeeks>52)throw Error('生产月数或销量回看周数无效');
